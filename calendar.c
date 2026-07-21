@@ -1,9 +1,24 @@
 /* ============================================================================
- * CSV Calendar
- *
+ * CSV Calendar - C Implementation
+ * 
+ * COMPILATION INSTRUCTIONS:
+ * 
+ * With GCC (MinGW-w64):
+ *   gcc -Os -s -o calendar.exe calendar.c -lgdi32 -lole32 -limm32 -lcomdlg32 -lcomctl32 -mwindows
+ * 
+ * With TCC (Tiny C Compiler):
+ *   tcc -o calendar.exe calendar.c -lgdi32 -lole32 -limm32 -lcomdlg32 -lcomctl32
+ * 
+ * REQUIREMENTS: Windows XP or later
+ * DEPENDENCIES: Win32 API only (GDI32, USER32, COMDLG32, OLE32)
+ * 
+ * NOTES:
+ * - Uses ANSI versions of API calls for maximum compatibility
+ * - CSV file stored as <executable_name>.csv in same directory
+ * - Memory leak fixes and proper resource cleanup added
+ * 
  * THIS WORK IS NOT FIT FOR ANY FUNCTION OR PURPOSE, COMES WITH NO WARRANTY,
  * AND IS BEING RELEASED INTO THE PUBLIC DOMAIN.
- *
  * ============================================================================ */
 
 #define _WIN32_WINNT 0x0501
@@ -970,7 +985,7 @@ void DrawUpcomingView(HDC hDC, int w, int h) {
             if (up[i]->personIdx < numPeople) strcpy(sPerson, aPeople[up[i]->personIdx]);
             
             char desc[256];
-            sprintf(desc, "%s   •   %s - %s   •   %s", up[i]->date, sTime1, sTime2, sPerson);
+            sprintf(desc, "%s       %s - %s       %s", up[i]->date, sTime1, sTime2, sPerson);
             SelectObject(hDC, hFontText); SetTextColor(hDC, RGB_HEX(0x5F6368));
             RECT tDesc = {cardLeft + 35, y + 56, cardRight - 15, y + 86};
             DrawTextA(hDC, desc, -1, &tDesc, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -1000,7 +1015,7 @@ void ExportUpcomingSchedule() {
                 MinToTimeString(up[i]->startMin + up[i]->duration, sTime2);
                 char sPerson[64] = "";
                 if (up[i]->personIdx < numPeople) strcpy(sPerson, aPeople[up[i]->personIdx]);
-                fprintf(fp, "%s\n%s   •   %s - %s   •   %s\n----------------------------------------\n",
+                fprintf(fp, "%s\n%s       %s - %s       %s\n----------------------------------------\n",
                         up[i]->title, up[i]->date, sTime1, sTime2, sPerson);
             }
             fclose(fp); free(up);
@@ -1301,7 +1316,7 @@ void PrintUpcomingVector(HDC hDC, RECT rPage, int dpiX, int dpiY) {
             MinToTimeString(up[i]->startMin, sTime1); MinToTimeString(up[i]->startMin + up[i]->duration, sTime2);
             char sPerson[64] = "";
             if (up[i]->personIdx < numPeople) strcpy(sPerson, aPeople[up[i]->personIdx]);
-            sprintf(line, "%s   •   %s (%s - %s)   •   %s", up[i]->date, up[i]->title, sTime1, sTime2, sPerson);
+            sprintf(line, "%s       %s (%s - %s)       %s", up[i]->date, up[i]->title, sTime1, sTime2, sPerson);
             RECT rLine = {rPage.left, y, rPage.right, y + (int)(dpiY * 0.3)};
             DrawTextA(hDC, line, -1, &rLine, DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS);
             y += (int)(dpiY * 0.35);
