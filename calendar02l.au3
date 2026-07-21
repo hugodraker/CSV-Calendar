@@ -5,7 +5,7 @@
 ; * AND IS BEING RELEASED INTO THE PUBLIC DOMAIN.
 ; *
 ; * ============================================================================ 
- #include <GUIConstantsEx.au3>
+#include <GUIConstantsEx.au3>
 #include <WindowsConstants.au3>
 #include <ScrollBarConstants.au3>
 #include <FontConstants.au3>
@@ -52,6 +52,10 @@ Global $aEvents[0][6]
 ; --- File I/O Configuration ---
 Local $sBaseName = StringRegExpReplace(@ScriptName, "\.[^.]*$", "")
 Global $sCSVFile = @ScriptDir & "\" & $sBaseName & ".csv"
+Global $sINIFile = @ScriptDir & "\" & $sBaseName & ".ini"
+
+; Load settings and people from INI file
+_LoadINI()
 
 ; Load from CSV instead of dummy data
 _LoadCSV()
@@ -67,7 +71,10 @@ Global $iEditingIndex = -1     ; Track index of event currently being text-edite
 ; ==============================================================================
 ; CREATE MAIN GUI & NATIVE CONTROLS
 ; ==============================================================================
-Global $hMainGUI = GUICreate("CSV Calendar", $iClientW, $iClientH, -1, -1, _
+Local $iWinX = Int(IniRead($sINIFile, "Window", "X", -1))
+Local $iWinY = Int(IniRead($sINIFile, "Window", "Y", -1))
+
+Global $hMainGUI = GUICreate("CSV Calendar", $iClientW, $iClientH, $iWinX, $iWinY, _
         BitOR($WS_OVERLAPPEDWINDOW, $WS_CLIPCHILDREN), $WS_EX_COMPOSITED)
 
 ; Zoom Buttons
@@ -135,6 +142,7 @@ _WinAPI_InvalidateRect($hCanvas, 0, True)
 While 1
     Switch GUIGetMsg()
         Case $GUI_EVENT_CLOSE
+            _SaveINI()
             Exit
 
         Case $idBtnZoomIn
@@ -222,8 +230,41 @@ While 1
 WEnd
 
 ; ==============================================================================
-; FILE I/O MANAGEMENT (CSV & EXPORT)
+; FILE I/O MANAGEMENT (CSV, INI & EXPORT)
 ; ==============================================================================
+Func _LoadINI()
+    $iClientW = Int(IniRead($sINIFile, "Window", "Width", 1050))
+    $iClientH = Int(IniRead($sINIFile, "Window", "Height", 700))
+    
+    Local $sPeopleStr = IniRead($sINIFile, "People", "Names", "")
+    If $sPeopleStr <> "" Then
+        Local $aTmp = StringSplit($sPeopleStr, ",", 2)
+        If UBound($aTmp) > 0 Then
+            ReDim $aPeople[UBound($aTmp)]
+            For $i = 0 To UBound($aTmp) - 1
+                $aPeople[$i] = StringStripWS($aTmp[$i], 3)
+            Next
+        EndIf
+    EndIf
+EndFunc
+
+Func _SaveINI()
+    Local $aPos = WinGetPos($hMainGUI)
+    Local $aClient = WinGetClientSize($hMainGUI)
+    If IsArray($aPos) And IsArray($aClient) Then
+        IniWrite($sINIFile, "Window", "X", $aPos[0])
+        IniWrite($sINIFile, "Window", "Y", $aPos[1])
+        IniWrite($sINIFile, "Window", "Width", $aClient[0])
+        IniWrite($sINIFile, "Window", "Height", $aClient[1])
+    EndIf
+
+    Local $sPeopleStr = ""
+    For $i = 0 To UBound($aPeople) - 1
+        $sPeopleStr &= $aPeople[$i] & ($i < UBound($aPeople) - 1 ? "," : "")
+    Next
+    IniWrite($sINIFile, "People", "Names", $sPeopleStr)
+EndFunc
+
 Func _LoadCSV()
     If Not FileExists($sCSVFile) Then Return
     Local $aLines = FileReadToArray($sCSVFile)
@@ -1706,9 +1747,7 @@ Func _PrintUpcomingVector($hPrintDC, $iMarginX, $iMarginY, $iUsableW, $iUsableH,
     Local $hFontItem  = _WinAPI_CreateFont(-Round($iDPIY * 14 / 72), 0, 0, 0, 700, False, False, False, 0, 0, 0, 0, 0, "Segoe UI")
     Local $hFontText  = _WinAPI_CreateFont(-Round($iDPIY * 11 / 72), 0, 0, 0, 400, False, False, False, 0, 0, 0, 0, 0, "Segoe UI")
 
-    Local $bInPage = False
     Local $iCurrentY = _StartPageHeader($hPrintDC, $hFontTitle, $iMarginX, $iMarginY, $iUsableW, $iTitleH)
-    $bInPage = True
 
     If UBound($aUpIdx) == 0 Then
         Local $hOld = _WinAPI_SelectObject($hPrintDC, $hFontText)
@@ -1718,11 +1757,8 @@ Func _PrintUpcomingVector($hPrintDC, $iMarginX, $iMarginY, $iUsableW, $iUsableH,
         _WinAPI_SelectObject($hPrintDC, $hOld)
     Else
         For $i = 0 To UBound($aUpIdx) - 1
-            ; Multi-page pagination check
-            If ($iCurrentY + $iCardH) > ($iMarginY + $iUsableH) Then
-                DllCall("gdi32.dll", "int", "EndPage", "handle", $hPrintDC)
-                $iCurrentY = _StartPageHeader($hPrintDC, $hFontTitle, $iMarginX, $iMarginY, $iUsableW, $iTitleH)
-            EndIf
+            ; Only print events that fit on a single page
+            If ($iCurrentY + $iCardH) > ($iMarginY + $iUsableH) Then ExitLoop
 
             Local $e = $aUpIdx[$i]
             Local $sDate = _FormatDateTitle($aEvents[$e][4])
@@ -1773,7 +1809,7 @@ Func _PrintUpcomingVector($hPrintDC, $iMarginX, $iMarginY, $iUsableW, $iUsableH,
         Next
     EndIf
 
-    If $bInPage Then DllCall("gdi32.dll", "int", "EndPage", "handle", $hPrintDC)
+    DllCall("gdi32.dll", "int", "EndPage", "handle", $hPrintDC)
 
     _WinAPI_DeleteObject($hFontTitle)
     _WinAPI_DeleteObject($hFontItem)
