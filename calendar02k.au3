@@ -1,4 +1,11 @@
-#include <GUIConstantsEx.au3>
+;* ============================================================================
+; * CSV Calendar
+; *
+; * THIS WORK IS NOT FIT FOR ANY FUNCTION OR PURPOSE, COMES WITH NO WARRANTY,
+; * AND IS BEING RELEASED INTO THE PUBLIC DOMAIN.
+; *
+; * ============================================================================ 
+ #include <GUIConstantsEx.au3>
 #include <WindowsConstants.au3>
 #include <ScrollBarConstants.au3>
 #include <FontConstants.au3>
