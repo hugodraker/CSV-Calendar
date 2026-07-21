@@ -23,7 +23,7 @@
 #include <FileConstants.au3>
 #include <MsgBoxConstants.au3>
 #include <WinAPIFiles.au3>
-#include <WinAPIDlg.au3> ; Added for _WinAPI_PrintDlg and $tagPRINTDLG
+#include <WinAPIDlg.au3>
 
 Opt("GUIOnEventMode", 0)
 Opt("MouseCoordMode", 2) ; Client coordinates
@@ -56,8 +56,6 @@ Global $sINIFile = @ScriptDir & "\" & $sBaseName & ".ini"
 
 ; Load settings and people from INI file
 _LoadINI()
-
-; Load from CSV instead of dummy data
 _LoadCSV()
 
 ; --- Interaction State Variables ---
@@ -297,20 +295,7 @@ Func _ExportUpcomingSchedule()
     If @error Or $sSavePath == "" Then Return
     If StringRight($sSavePath, 4) <> ".txt" Then $sSavePath &= ".txt"
 
-    Local $aUpIdx[0]
-    For $i = 0 To UBound($aEvents) - 1
-        If $aEvents[$i][4] >= $sCurrentDate Then _ArrayAdd($aUpIdx, $i)
-    Next
-
-    For $i = 0 To UBound($aUpIdx) - 2
-        For $j = $i + 1 To UBound($aUpIdx) - 1
-            Local $idxI = $aUpIdx[$i], $idxJ = $aUpIdx[$j]
-            If $aEvents[$idxJ][4] < $aEvents[$idxI][4] Or ($aEvents[$idxJ][4] == $aEvents[$idxI][4] And $aEvents[$idxJ][1] < $aEvents[$idxI][1]) Then
-                $aUpIdx[$i] = $idxJ
-                $aUpIdx[$j] = $idxI
-            EndIf
-        Next
-    Next
+    Local $aUpIdx = _GetSortedUpcomingIndices()
 
     Local $hFile = FileOpen($sSavePath, BitOR($FO_OVERWRITE, $FO_UTF8))
     If $hFile = -1 Then
@@ -803,20 +788,7 @@ Func _DrawUpcomingView($hMemDC, $iCanvasW, $iCanvasH)
     Local $hOldFont   = _WinAPI_SelectObject($hMemDC, $hFontTitle)
     Local $iEffectiveW = ($iCanvasW > $iCanvasWidth) ? $iCanvasW : $iCanvasW
     
-    Local $aUpIdx[0]
-    For $i = 0 To UBound($aEvents) - 1
-        If $aEvents[$i][4] >= $sCurrentDate Then _ArrayAdd($aUpIdx, $i)
-    Next
-    
-    For $i = 0 To UBound($aUpIdx) - 2
-        For $j = $i + 1 To UBound($aUpIdx) - 1
-            Local $idxI = $aUpIdx[$i], $idxJ = $aUpIdx[$j]
-            If $aEvents[$idxJ][4] < $aEvents[$idxI][4] Or ($aEvents[$idxJ][4] == $aEvents[$idxI][4] And $aEvents[$idxJ][1] < $aEvents[$idxI][1]) Then
-                $aUpIdx[$i] = $idxJ
-                $aUpIdx[$j] = $idxI
-            EndIf
-        Next
-    Next
+    Local $aUpIdx = _GetSortedUpcomingIndices()
     
     Local $iY = 20 - $iScrollY
     For $i = 0 To UBound($aUpIdx) - 1
@@ -912,6 +884,11 @@ Func WM_LBUTTONDOWN($hWnd, $iMsg, $wParam, $lParam)
 
     If BitShift($lParam, 16) < $iSubHeaderH And $iViewMode <> 7 Then Return $GUI_RUNDEFMSG 
 
+    ; --- SUSPEND HEAVY HIT-TESTING ---
+    ; Dragging is disabled in Upcoming mode. Suspending this prevents the 
+    ; script from aggressively re-sorting the array when clicking.
+    If $iViewMode == 7 Then Return $GUI_RUNDEFMSG 
+
     Local $iMouseX = BitAND($lParam, 0xFFFF)
     Local $iMouseY = BitShift($lParam, 16)
 
@@ -1003,6 +980,11 @@ Func WM_MOUSEMOVE($hWnd, $iMsg, $wParam, $lParam)
         _WinAPI_InvalidateRect($hCanvas, 0, True)
         Return $GUI_RUNDEFMSG
     EndIf
+
+    ; --- SUSPEND HEAVY HIT-TESTING ---
+    ; Prevent the script from re-sorting the event array on every single pixel 
+    ; the mouse moves across the canvas in Upcoming mode.
+    If $iViewMode == 7 Then Return $GUI_RUNDEFMSG
 
     Local $bOnHandle = False
     Local $iRawX = BitAND($lParam, 0xFFFF)
@@ -1135,6 +1117,36 @@ EndFunc
 ; ==============================================================================
 ; HELPER & CALCULATION UTILITIES
 ; ==============================================================================
+Func _GetSortedUpcomingIndices()
+    Local $iTotal = UBound($aEvents)
+    Local $aResult[0]
+    If $iTotal == 0 Then Return $aResult
+
+    Local $aUpSort[$iTotal][2] ; [Original Index, Sort Key]
+    Local $iCount = 0
+
+    For $i = 0 To $iTotal - 1
+        If $aEvents[$i][4] >= $sCurrentDate Then
+            $aUpSort[$iCount][0] = $i
+            ; Concatenate YYYY/MM/DD with zero-padded StartMin to create a robust sort string
+            $aUpSort[$iCount][1] = $aEvents[$i][4] & StringFormat("%04d", $aEvents[$i][1])
+            $iCount += 1
+        EndIf
+    Next
+
+    If $iCount == 0 Then Return $aResult
+
+    ReDim $aUpSort[$iCount][2]
+    _ArraySort($aUpSort, 0, 0, 0, 1) ; 1D ascending sort using built-in engine on column 1
+
+    ReDim $aResult[$iCount]
+    For $i = 0 To $iCount - 1
+        $aResult[$i] = $aUpSort[$i][0]
+    Next
+
+    Return $aResult
+EndFunc
+
 Func _GetEventScreenRect($iEventIdx)
     Local $aRect[4]
     If $iViewMode <= 5 Then
@@ -1205,19 +1217,7 @@ Func _GetEventScreenRect($iEventIdx)
         
     ElseIf $iViewMode == 7 Then
         Local $iEffectiveW = ($iClientW > $iCanvasWidth ? $iClientW : $iCanvasWidth)
-        Local $aUpIdx[0]
-        For $i = 0 To UBound($aEvents) - 1
-            If $aEvents[$i][4] >= $sCurrentDate Then _ArrayAdd($aUpIdx, $i)
-        Next
-        For $i = 0 To UBound($aUpIdx) - 2
-            For $j = $i + 1 To UBound($aUpIdx) - 1
-                Local $idxI = $aUpIdx[$i], $idxJ = $aUpIdx[$j]
-                If $aEvents[$idxJ][4] < $aEvents[$idxI][4] Or ($aEvents[$idxJ][4] == $aEvents[$idxI][4] And $aEvents[$idxJ][1] < $aEvents[$idxI][1]) Then
-                    $aUpIdx[$i] = $idxJ
-                    $aUpIdx[$j] = $idxI
-                EndIf
-            Next
-        Next
+        Local $aUpIdx = _GetSortedUpcomingIndices()
         For $i = 0 To UBound($aUpIdx) - 1
             If $aUpIdx[$i] == $iEventIdx Then
                 $aRect[0] = 35 - $iScrollX
@@ -1376,9 +1376,9 @@ Func _PrintSchedule()
     DllStructSetData($tPRINTDLG, "hwndOwner", $hMainGUI)
     DllStructSetData($tPRINTDLG, "Flags", BitOR(0x00000100, 0x00000004, 0x00040000)) ; PD_RETURNDC | PD_NOPAGENUMS | PD_USEDEVMODECOPIESANDCOLLATE
     DllStructSetData($tPRINTDLG, "nFromPage", 1)
-    DllStructSetData($tPRINTDLG, "nToPage", 1)
+    DllStructSetData($tPRINTDLG, "nToPage", 9999) 
     DllStructSetData($tPRINTDLG, "nMinPage", 1)
-    DllStructSetData($tPRINTDLG, "nMaxPage", 1)
+    DllStructSetData($tPRINTDLG, "nMaxPage", 9999) 
     DllStructSetData($tPRINTDLG, "nCopies", 1)
 
     If Not _WinAPI_PrintDlg($tPRINTDLG) Then Return
@@ -1724,20 +1724,8 @@ Func _PrintMonthVector($hPrintDC, $iMarginX, $iMarginY, $iUsableW, $iUsableH, $i
 EndFunc
 
 Func _PrintUpcomingVector($hPrintDC, $iMarginX, $iMarginY, $iUsableW, $iUsableH, $iDPIX, $iDPIY)
-    Local $aUpIdx[0]
-    For $i = 0 To UBound($aEvents) - 1
-        If $aEvents[$i][4] >= $sCurrentDate Then _ArrayAdd($aUpIdx, $i)
-    Next
-
-    For $i = 0 To UBound($aUpIdx) - 2
-        For $j = $i + 1 To UBound($aUpIdx) - 1
-            Local $idxI = $aUpIdx[$i], $idxJ = $aUpIdx[$j]
-            If $aEvents[$idxJ][4] < $aEvents[$idxI][4] Or ($aEvents[$idxJ][4] == $aEvents[$idxI][4] And $aEvents[$idxJ][1] < $aEvents[$idxI][1]) Then
-                $aUpIdx[$i] = $idxJ
-                $aUpIdx[$j] = $idxI
-            EndIf
-        Next
-    Next
+    Local $aUpIdx = _GetSortedUpcomingIndices()
+    Local $iCount = UBound($aUpIdx)
 
     Local $iTitleH  = Round($iDPIY * 0.5)
     Local $iCardH   = Round($iDPIY * 0.9)
@@ -1749,16 +1737,21 @@ Func _PrintUpcomingVector($hPrintDC, $iMarginX, $iMarginY, $iUsableW, $iUsableH,
 
     Local $iCurrentY = _StartPageHeader($hPrintDC, $hFontTitle, $iMarginX, $iMarginY, $iUsableW, $iTitleH)
 
-    If UBound($aUpIdx) == 0 Then
+    If $iCount == 0 Then
         Local $hOld = _WinAPI_SelectObject($hPrintDC, $hFontText)
         _GDI_SetTextColor($hPrintDC, 0x5F6368)
         Local $tRect = _WinAPI_CreateRect($iMarginX, $iCurrentY, $iMarginX + $iUsableW, $iCurrentY + $iCardH)
         _WinAPI_DrawText($hPrintDC, "No upcoming events found.", $tRect, BitOR($DT_LEFT, $DT_TOP, $DT_SINGLELINE))
         _WinAPI_SelectObject($hPrintDC, $hOld)
+        DllCall("gdi32.dll", "int", "EndPage", "handle", $hPrintDC)
     Else
-        For $i = 0 To UBound($aUpIdx) - 1
-            ; Only print events that fit on a single page
-            If ($iCurrentY + $iCardH) > ($iMarginY + $iUsableH) Then ExitLoop
+        Local $i = 0
+        While $i < $iCount
+            ; Paginate dynamically based on vertical constraints
+            If ($iCurrentY + $iCardH) > ($iMarginY + $iUsableH) Then
+                DllCall("gdi32.dll", "int", "EndPage", "handle", $hPrintDC)
+                $iCurrentY = _StartPageHeader($hPrintDC, $hFontTitle, $iMarginX, $iMarginY, $iUsableW, $iTitleH)
+            EndIf
 
             Local $e = $aUpIdx[$i]
             Local $sDate = _FormatDateTitle($aEvents[$e][4])
@@ -1806,10 +1799,10 @@ Func _PrintUpcomingVector($hPrintDC, $iMarginX, $iMarginY, $iUsableW, $iUsableH,
             _WinAPI_SelectObject($hPrintDC, $hOldFont)
 
             $iCurrentY += $iCardH + $iCardGap
-        Next
+            $i += 1
+        WEnd
+        DllCall("gdi32.dll", "int", "EndPage", "handle", $hPrintDC)
     EndIf
-
-    DllCall("gdi32.dll", "int", "EndPage", "handle", $hPrintDC)
 
     _WinAPI_DeleteObject($hFontTitle)
     _WinAPI_DeleteObject($hFontItem)
