@@ -236,7 +236,7 @@ Func _LoadINI()
     
     Local $sPeopleStr = IniRead($sINIFile, "People", "Names", "")
     If $sPeopleStr <> "" Then
-        Local $aTmp = StringSplit($sPeopleStr, ",", 2)
+        Local $aTmp = StringSplit($sPeopleStr, "¦", 2)
         If UBound($aTmp) > 0 Then
             ReDim $aPeople[UBound($aTmp)]
             For $i = 0 To UBound($aTmp) - 1
@@ -258,7 +258,7 @@ Func _SaveINI()
 
     Local $sPeopleStr = ""
     For $i = 0 To UBound($aPeople) - 1
-        $sPeopleStr &= $aPeople[$i] & ($i < UBound($aPeople) - 1 ? "," : "")
+        $sPeopleStr &= $aPeople[$i] & ($i < UBound($aPeople) - 1 ? "¦" : "")
     Next
     IniWrite($sINIFile, "People", "Names", $sPeopleStr)
 EndFunc
@@ -268,9 +268,9 @@ Func _LoadCSV()
     Local $aLines = FileReadToArray($sCSVFile)
     If @error Then Return
     For $i = 1 To UBound($aLines) - 1 ; Skip header
-        Local $aParts = StringSplit($aLines[$i], ",", 2)
+        Local $aParts = StringSplit($aLines[$i], "¦", 2)
         If UBound($aParts) >= 6 Then
-            Local $sTitle = StringReplace($aParts[0], "%2C", ",")
+            Local $sTitle = StringReplace($aParts[0], "%2C", "¦")
             $sTitle = StringReplace($sTitle, "%0A", @CRLF)
             _AddEvent($sTitle, Int($aParts[1]), Int($aParts[2]), Int($aParts[3]), $aParts[4], Int($aParts[5]))
         EndIf
@@ -281,11 +281,11 @@ Func _SaveCSV()
     Local $hFile = FileOpen($sCSVFile, 2) ; Overwrite mode
     FileWriteLine($hFile, "Title,StartMin,Duration,Color,Date,PersonIdx")
     For $i = 0 To UBound($aEvents) - 1
-        Local $sTitle = StringReplace($aEvents[$i][0], ",", "%2C")
+        Local $sTitle = StringReplace($aEvents[$i][0], "¦", "%2C")
         $sTitle = StringReplace($sTitle, @CRLF, "%0A")
         $sTitle = StringReplace($sTitle, @CR, "%0A")
         $sTitle = StringReplace($sTitle, @LF, "%0A")
-        FileWriteLine($hFile, $sTitle & "," & $aEvents[$i][1] & "," & $aEvents[$i][2] & "," & $aEvents[$i][3] & "," & $aEvents[$i][4] & "," & $aEvents[$i][5])
+        FileWriteLine($hFile, $sTitle & "¦" & $aEvents[$i][1] & "¦" & $aEvents[$i][2] & "¦" & $aEvents[$i][3] & "¦" & $aEvents[$i][4] & "¦" & $aEvents[$i][5])
     Next
     FileClose($hFile)
 EndFunc
@@ -1020,6 +1020,27 @@ Func WM_LBUTTONDBLCLK($hWnd, $iMsg, $wParam, $lParam)
 
     Local $iMouseX = BitAND($lParam, 0xFFFF)
     Local $iMouseY = BitShift($lParam, 16)
+
+    ; --- OPTIMIZED BYPASS ---
+    ; Instead of calling _GetEventScreenRect inside a loop (which triggers N sorts),
+    ; we sort exactly once and test the boundaries directly so editing stays functional.
+    If $iViewMode == 7 Then
+        Local $aUpIdx = _GetSortedUpcomingIndices()
+        Local $iEffectiveW = ($iClientW > $iCanvasWidth ? $iClientW : $iCanvasWidth)
+        For $i = 0 To UBound($aUpIdx) - 1
+            Local $e = $aUpIdx[$i]
+            Local $iCardTop = 20 - $iScrollY + ($i * 115) + 16
+            Local $iCardBottom = $iCardTop + 34
+            Local $iCardLeft = 35 - $iScrollX
+            Local $iCardRight = $iEffectiveW - 35
+            
+            If $iMouseX >= $iCardLeft And $iMouseX <= $iCardRight And $iMouseY >= $iCardTop And $iMouseY <= $iCardBottom Then
+                _OpenInPlaceEdit($e)
+                Return $GUI_RUNDEFMSG
+            EndIf
+        Next
+        Return $GUI_RUNDEFMSG
+    EndIf
 
     For $i = UBound($aEvents) - 1 To 0 Step -1
         Local $aRect = _GetEventScreenRect($i)
