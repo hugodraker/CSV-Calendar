@@ -206,16 +206,16 @@ void LoadCSV() {
     while (fgets(line, sizeof(line), fp)) {
         char title[1024], dt[16];
         int start, dur, col, pIdx;
-        char* token = strtok(line, ",");
+        char* token = strtok(line, "¦");
         if (!token) continue;
         strcpy(title, token);
-        start = atoi(strtok(NULL, ","));
-        dur = atoi(strtok(NULL, ","));
-        col = atoi(strtok(NULL, ","));
-        strcpy(dt, strtok(NULL, ","));
+        start = atoi(strtok(NULL, "¦"));
+        dur = atoi(strtok(NULL, "¦"));
+        col = atoi(strtok(NULL, "¦"));
+        strcpy(dt, strtok(NULL, "¦"));
         pIdx = atoi(strtok(NULL, ",\r\n"));
         
-        ReplaceAll(title, "%2C", ",");
+        ReplaceAll(title, "%2C", "¦");
         ReplaceAll(title, "%0A", "\r\n");
         AddEvent(title, start, dur, col, dt, pIdx);
     }
@@ -225,14 +225,14 @@ void LoadCSV() {
 void SaveCSV() {
     FILE* fp = fopen(sCSVFile, "w");
     if (!fp) return;
-    fprintf(fp, "Title,StartMin,Duration,Color,Date,PersonIdx\n");
+    fprintf(fp, "Title¦StartMin¦Duration¦Color¦Date¦PersonIdx\n");
     for (int i = 0; i < numEvents; i++) {
         char title[1024];
         strcpy(title, aEvents[i].title);
-        ReplaceAll(title, ",", "%2C");
+        ReplaceAll(title, "¦", "%2C");
         ReplaceAll(title, "\r\n", "%0A");
         ReplaceAll(title, "\n", "%0A");
-        fprintf(fp, "%s,%d,%d,%d,%s,%d\n", title, aEvents[i].startMin, aEvents[i].duration,
+        fprintf(fp, "%s¦%d¦%d¦%d¦%s¦%d\n", title, aEvents[i].startMin, aEvents[i].duration,
                 aEvents[i].color, aEvents[i].date, aEvents[i].personIdx);
     }
     fclose(fp);
