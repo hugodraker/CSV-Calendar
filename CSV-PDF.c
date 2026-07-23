@@ -2,7 +2,7 @@
  * CSV-PDF Calendar Generator
  * 
  * Compilation Instructions:
- * gcc -Os -s -o CSV-PDF.exe CSV-PDF.c -mwindows -lcomctl32 -lgdi32 -lcomdlg32
+ * gcc -Os -s -o CSV-PDF.exe main.c -mwindows -lcomctl32 -lgdi32 -lcomdlg32
  *
  * Disclaimer:
  * This software is provided "as is", without warranty of any kind. 
@@ -253,7 +253,7 @@ void format_time(int min_since_midnight, char* buf) {
     const char* ampm = "AM";
     if (h >= 12) { ampm = "PM"; if (h > 12) h -= 12; }
     if (h == 0) h = 12;
-    sprintf(buf, "%d:%02d %s", h, m, ampm);
+    sprintf(buf, "%02d:%02d %s", h, m, ampm);
 }
 
 void generate_pdf(const char* out_file, int mode, int first_day, float margH_pct, float margV_pct, int sY, int sM, int sD, int eY, int eM, int eD) {
@@ -266,7 +266,8 @@ void generate_pdf(const char* out_file, int mode, int first_day, float margH_pct
     float m_x = pt_w * (margH_pct / 100.0f);
     float m_y = pt_h * (margV_pct / 100.0f);
 
-    fprintf(f, "%%PDF-1.4\n");
+    // PDF 1.1 Compatible Header
+    fprintf(f, "%%PDF-1.1\n");
     
     // Core Reference Objects
     int info_obj = 1;
@@ -482,7 +483,7 @@ void generate_pdf(const char* out_file, int mode, int first_day, float margH_pct
         int is_person_view = (mode == 3 || mode == 4);
         
         float m_top = m_y + 50;
-        float time_w = 35.0f; // Dedicated width reserved for the time text labels
+        float time_w = 42.0f; // Expanded dedicated width for time text labels (with leading zeros)
         float m_x_grid = m_x + time_w;
         float gw = pt_w - m_x*2 - time_w; 
         float gh = pt_h - m_y - m_top;
@@ -532,7 +533,8 @@ void generate_pdf(const char* out_file, int mode, int first_day, float margH_pct
             s_app(&s, "0.8 0.8 0.8 RG 1 w %.2f %.2f m %.2f %.2f l S\n", m_x_grid, hy, m_x_grid + gw, hy);
             if(h < 24 && h % 2 == 0) { // Labels every 2 hours
                 char hl[16]; format_time(h*60, hl);
-                s_app(&s, "BT /F1 8 Tf 0.5 0.5 0.5 rg %.2f %.2f Td (%s) Tj ET\n", m_x_grid - 32, hy - 3, hl);
+                // Positioned further left to avoid crowding the grid line at tight margins
+                s_app(&s, "BT /F1 8 Tf 0.5 0.5 0.5 rg %.2f %.2f Td (%s) Tj ET\n", m_x_grid - 39, hy - 3, hl);
             }
         }
         
