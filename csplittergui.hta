@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>C File Splitter</title>
+    <hta:application
+        applicationname="CFileSplitter"
+        border="dialog"
+        caption="yes"
+        showintasksbar="no"
+        scroll="no"
+        singleinstance="yes"
+        sysmenu="yes"
+        windowstate="normal">
+    <style>
+        body {
+            font-family: Segoe UI, Arial, sans-serif;
+            padding: 24px;
+            margin: 0;
+            background: #f5f5f5;
+            overflow: hidden;
+        }
+        .container {
+            width: 560px;
+            background: white;
+            padding: 30px 36px 36px 36px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            font-size: 24px;
+            margin: 0 0 24px 0;
+            border-bottom: 2px solid #6d4aff;
+            padding-bottom: 10px;
+        }
+        label {
+            display: block;
+            margin-top: 18px;
+            color: #444;
+            font-weight: 600;
+        }
+        .file-row {
+            display: flex;
+            align-items: center;
+            margin-top: 5px;
+        }
+        .file-row input[type="text"] {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        input[type="number"] {
+            width: 100%;
+            padding: 10px;
+            margin-top: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        button#btnGo {
+            background: #6d4aff;
+            color: white;
+            border: none;
+            padding: 12px 36px;
+            margin-top: 26px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        button#btnGo:hover { background: #5a42e0; }
+        #status {
+            margin-top: 20px;
+            padding: 14px;
+            border-radius: 4px;
+            display: none;
+            font-size: 13px;
+            white-space: pre-wrap;
+        }
+        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error   { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    </style>
+    <script language="VBScript">
+        Option Explicit
+
+        Dim elFilePath, elChunks, elFileBrowse, elStatus, elContainer
+
+        Sub Window_onLoad()
+            Set elFilePath   = document.getElementById("txtFilePath")
+            Set elChunks     = document.getElementById("txtChunks")
+            Set elFileBrowse = document.getElementById("fileBrowse")
+            Set elStatus     = document.getElementById("status")
+            Set elContainer  = document.getElementById("container")
+            elChunks.Value = "2"
+            setTimeout "DoResize", 50
+        End Sub
+
+        Sub PickFile()
+            elFileBrowse.Click
+        End Sub
+
+        Sub OnFileChange()
+            If elFileBrowse.Value <> "" Then
+                Dim fso, full
+                Set fso = CreateObject("Scripting.FileSystemObject")
+                full = fso.GetAbsolutePathName(elFileBrowse.Value)
+                elFilePath.Value = full
+            End If
+        End Sub
+
+        Sub DoResize()
+            Dim w, h
+            w = elContainer.offsetWidth  + 80
+            h = elContainer.offsetHeight + 80
+            If w < 480  Then w = 480
+            If h < 360  Then h = 360
+            window.resizeTo w, h
+            window.moveTo 200, 120
+        End Sub
+
+        ' =====================================================
+        '  MAIN SPLIT LOGIC
+        ' =====================================================
+        Sub GoSplit()
+            Dim fso, strPath, numChunks
+            Set fso = CreateObject("Scripting.FileSystemObject")
+            strPath = elFilePath.Value
+
+            If Not IsNumeric(elChunks.Value) Then
+                ShowStatus "Enter a valid number of chunks.", "error"
+                Exit Sub
+            End If
+            numChunks = CInt(elChunks.Value)
+
+            If strPath = "" Then
+                ShowStatus "Please select a C source file.", "error"
+                Exit Sub
+            End If
+            If Not fso.FileExists(strPath) Then
+                ShowStatus "File not found: " & strPath, "error"
+                Exit Sub
+            End If
+            If numChunks < 2 Then
+                ShowStatus "Minimum number of chunks is 2.", "error"
+                Exit Sub
+            End If
+
+            ' --- Read file ---
+            Dim ts, content
+            Set ts = fso.OpenTextFile(strPath, 1)
+            content = ts.ReadAll
+            ts.Close
+
+            Dim strDir
+            strDir = fso.GetParentFolderName(strPath)
+
+            Dim lines
+            lines = Split(content, vbCrLf)
+            Dim totalLines : totalLines = UBound(lines) + 1
+
+            ' -------------------------------------------------------
+            '  PASS 1: Strip comments/strings, build codeLines array
+            '          and compute brace depth at each line.
+            ' -------------------------------------------------------
+            Dim codeLines()
+            ReDim codeLines(totalLines - 1)
+            Dim depthBefore()       ' brace depth BEFORE this line
+            ReDim depthBefore(totalLines - 1)
+            Dim depthAfter()        ' brace depth AFTER this line
+            ReDim depthAfter(totalLines - 1)
+
+            Dim inBlockComment : inBlockComment = False
+            Dim i, stripped, braceDelta, depth
+            depth = 0
+
+            For i = 0 To totalLines - 1
+                stripped = StripLine(lines(i), inBlockComment)
+                codeLines(i) = stripped
+                depthBefore(i) = depth
+                braceDelta = CountChar(stripped, "{") - CountChar(stripped, "}")
+                depth = depth + braceDelta
+                depthAfter(i) = depth
+            Next
+
+            ' -------------------------------------------------------
+            '  PASS 2: Find procedure boundaries.
+            '  A procedure starts when depthBefore = 0 and the line
+            '  matches a function-definition pattern.
+            ' -------------------------------------------------------
+            Dim boundaryLines()
+            ReDim boundaryLines(totalLines)
+            Dim bCount : bCount = 0
+
+            ' First boundary is always line 0
+            boundaryLines(0) = 0
+            bCount = 1
+
+            For i = 1 To totalLines - 1
+                ' A new procedure boundary: we were at depth 0 before
+                ' this line, and this line looks like a function def.
+                If depthBefore(i) = 0 Then
+                    If IsFunctionStart(codeLines, i) Then
+                        boundaryLines(bCount) = i
+                        bCount = bCount + 1
+                    End If
+                End If
+            Next
+
+            ' boundaryLines(0..bCount-1) now holds every procedure start line.
+            ' There are bCount procedure segments (including the initial one
+            ' which may contain globals/includes).
+
+            ' -------------------------------------------------------
+            '  PASS 3: Choose split points.
+            '  We have bCount segments. We need numChunks output files.
+            '  Divide segments as evenly as possible.
+            ' -------------------------------------------------------
+            Dim segsPerChunk, segRemainder
+            segsPerChunk = bCount \ numChunks
+            segRemainder = bCount Mod numChunks
+
+            ' If more chunks than segments, cap to segment count
+            Dim actualChunks
+            If segsPerChunk = 0 And segRemainder > 0 Then
+                actualChunks = bCount
+            Else
+                actualChunks = numChunks
+            End If
+
+            ' Build the list of start/end line for each chunk
+            Dim segIdx : segIdx = 0
+            Dim cIdx
+
+            For cIdx = 1 To actualChunks
+                Dim numSegs : numSegs = segsPerChunk
+                If cIdx <= segRemainder Then numSegs = numSegs + 1
+
+                Dim beginLine, endLine
+                beginLine = boundaryLines(segIdx)
+
+                segIdx = segIdx + numSegs
+
+                If segIdx >= bCount Then
+                    endLine = totalLines - 1
+                Else
+                    endLine = boundaryLines(segIdx) - 1
+                End If
+
+                WriteChunk fso, strDir, cIdx, lines, beginLine, endLine
+            Next
+
+            Dim msgOut
+            msgOut = "Done!  Split into " & actualChunks & " file(s)." & vbCrLf & _
+                     "Found " & (bCount - 1) & " procedure(s), " & bCount & " segment(s)." & vbCrLf & _
+                     "Saved to: " & strDir
+            ShowStatus msgOut, "success"
+        End Sub
+
+        ' ---- Write a range of lines to <num>.c ----
+        Sub WriteChunk(fso, strDir, chunkNum, lines, startLine, endLine)
+            Dim outPath, j, buf
+            outPath = strDir & "\" & chunkNum & ".c"
+            buf = ""
+            For j = startLine To endLine
+                If j >= 0 And j <= UBound(lines) Then
+                    buf = buf & lines(j) & vbCrLf
+                End If
+            Next
+            Dim out
+            Set out = fso.CreateTextFile(outPath, True)
+            out.Write buf
+            out.Close
+        End Sub
+
+        ' ---- Count occurrences of a character in a string ----
+        Function CountChar(str, ch)
+            Dim c, k
+            c = 0
+            k = 1
+            Do
+                k = InStr(k, str, ch)
+                If k = 0 Then Exit Do
+                c = c + 1
+                k = k + 1
+            Loop
+            CountChar = c
+        End Function
+
+        ' ---- Min helper ----
+        Function Min(a, b)
+            If a < b Then Min = a Else Min = b
+        End Function
+
+        ' =====================================================
+        '  StripLine: Remove comments and string/char literals
+        '             from a line, preserving code tokens.
+        '             Tracks multi-line block comment state.
+        ' =====================================================
+        Function StripLine(ByVal s, ByRef inBlockComment)
+            Dim result, pos, inStr, inChr, inLnCmt
+            result = ""
+            inStr = False
+            inChr = False
+            inLnCmt = False
+            pos = 1
+
+            Do While pos <= Len(s)
+                Dim ch, nextCh
+                ch = Mid(s, pos, 1)
+                If pos < Len(s) Then
+                    nextCh = Mid(s, pos + 1, 1)
+                Else
+                    nextCh = ""
+                End If
+
+                If inBlockComment Then
+                    ' Inside /* ... */
+                    If ch = "*" And nextCh = "/" Then
+                        inBlockComment = False
+                        pos = pos + 2
+                    Else
+                        pos = pos + 1
+                    End If
+
+                ElseIf inLnCmt Then
+                    ' Rest of line is a // comment, stop here
+                    Exit Do
+
+                ElseIf inStr Then
+                    ' Inside "..."
+                    If ch = "\" Then
+                        pos = pos + 2  ' skip escaped char
+                    ElseIf ch = """" Then
+                        inStr = False
+                        pos = pos + 1
+                    Else
+                        pos = pos + 1
+                    End If
+
+                ElseIf inChr Then
+                    ' Inside '...'
+                    If ch = "\" Then
+                        pos = pos + 2
+                    ElseIf ch = "'" Then
+                        inChr = False
+                        pos = pos + 1
+                    Else
+                        pos = pos + 1
+                    End If
+
+                Else
+                    ' Normal code
+                    If ch = "/" And nextCh = "/" Then
+                        inLnCmt = True
+                        pos = pos + 2
+                    ElseIf ch = "/" And nextCh = "*" Then
+                        inBlockComment = True
+                        pos = pos + 2
+                    ElseIf ch = """" Then
+                        inStr = True
+                        result = result & " "  ' placeholder
+                        pos = pos + 1
+                    ElseIf ch = "'" Then
+                        inChr = True
+                        result = result & " "
+                        pos = pos + 1
+                    Else
+                        result = result & ch
+                        pos = pos + 1
+                    End If
+                End If
+            Loop
+
+            StripLine = result
+        End Function
+
+        ' =====================================================
+        '  IsFunctionStart: Determine if a stripped code line
+        '  looks like the beginning of a function definition.
+        '
+        '  Criteria:
+        '   - Not blank, not a preprocessor directive
+        '   - Contains ( and )
+        '   - Does NOT end with ;
+        '   - Does NOT start with control-flow keywords
+        '   - Has { on same line OR next non-blank code line starts with {
+        ' =====================================================
+        Function IsFunctionStart(codeLines, idx)
+            Dim s : s = Trim(codeLines(idx))
+            Dim ub : ub = UBound(codeLines)
+
+            ' Reject blank lines
+            If s = "" Then IsFunctionStart = False : Exit Function
+
+            ' Reject preprocessor (#include, #define, #if, etc.)
+            If Left(s, 1) = "#" Then IsFunctionStart = False : Exit Function
+
+            ' Must contain parentheses
+            If InStr(s, "(") = 0 Or InStr(s, ")") = 0 Then
+                IsFunctionStart = False
+                Exit Function
+            End If
+
+            ' Must NOT end with semicolon (declaration/prototype/call)
+            If Right(s, 1) = ";" Then
+                IsFunctionStart = False
+                Exit Function
+            End If
+
+            ' Reject control-flow keywords
+            Dim lower : lower = LCase(s)
+            If StartsWithWord(lower, "if ") Or _
+               StartsWithWord(lower, "for ") Or _
+               StartsWithWord(lower, "while ") Or _
+               StartsWithWord(lower, "switch ") Or _
+               StartsWithWord(lower, "else ") Or _
+               StartsWithWord(lower, "do ") Or _
+               StartsWithWord(lower, "else{") Or _
+               StartsWithWord(lower, "do{") Then
+                IsFunctionStart = False
+                Exit Function
+            End If
+
+            ' Case A: opening brace on the SAME line
+            If InStr(s, "{") > 0 Then
+                IsFunctionStart = True
+                Exit Function
+            End If
+
+            ' Case B: opening brace on the NEXT non-blank code line
+            Dim k : k = idx + 1
+            Do While k <= ub
+                Dim nxt : nxt = Trim(codeLines(k))
+                If nxt <> "" Then
+                    If Left(nxt, 1) = "{" Then
+                        IsFunctionStart = True
+                    Else
+                        IsFunctionStart = False
+                    End If
+                    Exit Function
+                End If
+                k = k + 1
+            Loop
+
+            IsFunctionStart = False
+        End Function
+
+        ' ---- Check if str starts with word (followed by space or brace) ----
+        Function StartsWithWord(str, word)
+            Dim wLen : wLen = Len(word)
+            If Len(str) < wLen Then
+                StartsWithWord = False
+            Else
+                StartsWithWord = (Left(str, wLen) = word)
+            End If
+        End Function
+
+        ' ---- Show status message ----
+        Sub ShowStatus(msg, kind)
+            elStatus.InnerHTML = msg
+            elStatus.ClassName = kind
+            elStatus.Style.display = "block"
+            setTimeout "DoResize", 50
+        End Sub
+    </script>
+</head>
+<body>
+    <div class="container" id="container">
+        <h1>C Source Code Splitter</h1>
+
+        <label>Input File:</label>
+        <div class="file-row">
+            <input type="text" id="txtFilePath" readonly>
+            <input type="file" id="fileBrowse"
+                   accept=".c,.h"
+                   style="display:none;"
+                   onchange="OnFileChange()">
+        </div>
+        <button id="btnBrowse" onclick="PickFile()"
+                style="background:#444;color:#fff;border:none;padding:10px 18px;
+                       border-radius:4px;cursor:pointer;font-size:14px;margin-left:8px;">
+            Browse...
+        </button>
+
+        <label>Number of Chunks:</label>
+        <input type="number" id="txtChunks" min="2" value="2">
+
+        <button id="btnGo" onclick="GoSplit()">Go</button>
+
+        <div id="status"></div>
+    </div>
+</body>
+</html>
