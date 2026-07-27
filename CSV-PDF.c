@@ -2,7 +2,7 @@
  * CSV-PDF Calendar Generator
  * 
  * Compilation Instructions:
- * gcc -Os -s -o CSV-PDF.exe main.c -mwindows -lcomctl32 -lgdi32 -lcomdlg32
+ * gcc -Os -s -o CSV-PDF.exe CSV-PDF.c -mwindows -lcomctl32 -lgdi32 -lcomdlg32
  *
  * Disclaimer:
  * This software is provided "as is", without warranty of any kind. 
@@ -45,7 +45,7 @@ const char* short_months[] = {"", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
                               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 
 // --- GUI Globals ---
-HWND hMain, hTxtCsv, hBtnBrowse, hCboMode, hCboFirstDay, hDateStart, hDateEnd;
+HWND hMain, hTxtCsv, hBtnBrowse, hCboMode, hCboFirstDay, hDateStart, hDateEnd, hCboNode;
 HWND hBtnPrevMonth, hBtnNextMonth, hTxtMargH, hTxtMargV;
 HWND hTxtWidth, hTxtHeight, hBtnToggle, hBtnCreate, hBtnExit;
 int isLandscape = 0;
@@ -256,7 +256,7 @@ void format_time(int min_since_midnight, char* buf) {
     sprintf(buf, "%02d:%02d %s", h, m, ampm);
 }
 
-void generate_pdf(const char* out_file, int mode, int first_day, float margH_pct, float margV_pct, int sY, int sM, int sD, int eY, int eM, int eD) {
+void generate_pdf(const char* out_file, int mode, int first_day, int node_filter, float margH_pct, float margV_pct, int sY, int sM, int sD, int eY, int eM, int eD) {
     FILE* f = fopen(out_file, "wb");
     if (!f) return;
     
@@ -301,7 +301,10 @@ void generate_pdf(const char* out_file, int mode, int first_day, float margH_pct
         long d2 = eY*10000 + eM*100 + eD;
         long de = events[i].year*10000 + events[i].month*100 + events[i].day;
         if (de >= d1 && de <= d2) {
-            v_events[v_count++] = events[i];
+            // Apply targeted Node filter if selected
+            if (node_filter == -1 || events[i].personIdx == node_filter) {
+                v_events[v_count++] = events[i];
+            }
         }
     }
     qsort(v_events, v_count, sizeof(Event), cmp_events);
@@ -450,8 +453,9 @@ void generate_pdf(const char* out_file, int mode, int first_day, float margH_pct
                         pdf_rounded_rect(&s, cx + 2, ey - 12, cw - 4, 14, 4);
                         
                         pdf_text_color(&s, v_events[i].color);
-                        char tt[32];
-                        strncpy(tt, v_events[i].title, 20); tt[20]=0;
+                        char tt[128];
+                        // Expanded string truncation threshold to 127
+                        strncpy(tt, v_events[i].title, 127); tt[127]=0;
                         s_app(&s, "BT /F1 8 Tf %.2f %.2f Td (%s) Tj ET\n", cx + 4, ey - 8, tt);
                         ey -= 16;
                     } else if (ev_in_cell == 4) {
@@ -468,14 +472,6 @@ void generate_pdf(const char* out_file, int mode, int first_day, float margH_pct
         fprintf(f, "%d 0 obj\n<< /Length %d >>\nstream\n%s\nendstream\nendobj\n", stream_obj, s.len, s.data);
 
     } else { // --- Dayplanner / Column Views (0, 1, 2, 3, 4) ---
-        int page_obj = pdf_obj_cnt++;
-        int stream_obj = pdf_obj_cnt++;
-        page_list[page_cnt++] = page_obj;
-
-        pdf_objects[page_obj] = ftell(f);
-        fprintf(f, "%d 0 obj\n<< /Type /Page /Parent %d 0 R /MediaBox [0 0 %.2f %.2f] /Contents %d 0 R /Resources << /Font << /F1 %d 0 R /F2 %d 0 R >> >> >>\nendobj\n", 
-            page_obj, pages_obj, pt_w, pt_h, stream_obj, font1_obj, font2_obj);
-
         int num_cols = 1;
         if (mode == 1 || mode == 3) num_cols = 4;
         if (mode == 2 || mode == 4) num_cols = 7;
@@ -483,13 +479,13 @@ void generate_pdf(const char* out_file, int mode, int first_day, float margH_pct
         int is_person_view = (mode == 3 || mode == 4);
         
         float m_top = m_y + 50;
-        float time_w = 42.0f; // Expanded dedicated width for time text labels (with leading zeros)
+        float time_w = 42.0f; 
         float m_x_grid = m_x + time_w;
         float gw = pt_w - m_x*2 - time_w; 
         float gh = pt_h - m_y - m_top;
         float cw = gw / num_cols;
         
-        // Setup base start date for columns
+        // Setup base start date for iteration
         struct tm base_t;
         memset(&base_t, 0, sizeof(base_t));
         base_t.tm_year = sY - 1900; 
@@ -497,84 +493,120 @@ void generate_pdf(const char* out_file, int mode, int first_day, float margH_pct
         base_t.tm_mday = sD;
         base_t.tm_isdst = -1;
         
-        char planner_title[128];
-        if (is_person_view) {
-            sprintf(planner_title, "Schedule - %s %d, %d", months[sM], sD, sY);
-        } else {
-            if (num_cols == 1) sprintf(planner_title, "%s %d, %d", months[sM], sD, sY);
-            else sprintf(planner_title, "Week of %s %d, %d", short_months[sM], sD, sY);
-        }
-        pdf_center_text(&s, planner_title, m_x_grid, pt_h - m_y - 20, gw, 20, 1);
-
-        for(int c=0; c<num_cols; c++) {
-            char chd[64];
-            if(is_person_view) {
-                if (c < people_count && strlen(people[c]) > 0) {
-                    sprintf(chd, "%s", people[c]);
-                } else {
-                    sprintf(chd, "Person %d", c + 1);
-                }
-            } else {
-                struct tm t = base_t;
-                t.tm_mday += c;
-                mktime(&t);
-                sprintf(chd, "%s %d", short_months[t.tm_mon + 1], t.tm_mday);
-            }
-            pdf_center_text(&s, chd, m_x_grid + c*cw, pt_h - m_top + 10, cw, 12, 1);
-            
-            // Draw column lines
-            s_app(&s, "0.5 0.5 0.5 RG 1 w %.2f %.2f m %.2f %.2f l S\n", m_x_grid + c*cw, m_y, m_x_grid + c*cw, m_y + gh);
-        }
-        s_app(&s, "0.5 0.5 0.5 RG 1 w %.2f %.2f m %.2f %.2f l S\n", m_x_grid + gw, m_y, m_x_grid + gw, m_y + gh); // Last Line
-
-        // Hourly lines (0 - 24)
-        for(int h=0; h<=24; h++) {
-            float hy = m_y + gh - (h / 24.0f) * gh;
-            s_app(&s, "0.8 0.8 0.8 RG 1 w %.2f %.2f m %.2f %.2f l S\n", m_x_grid, hy, m_x_grid + gw, hy);
-            if(h < 24 && h % 2 == 0) { // Labels every 2 hours
-                char hl[16]; format_time(h*60, hl);
-                // Positioned further left to avoid crowding the grid line at tight margins
-                s_app(&s, "BT /F1 8 Tf 0.5 0.5 0.5 rg %.2f %.2f Td (%s) Tj ET\n", m_x_grid - 39, hy - 3, hl);
-            }
-        }
+        // Setup end date constraint 
+        struct tm end_t;
+        memset(&end_t, 0, sizeof(end_t));
+        end_t.tm_year = eY - 1900;
+        end_t.tm_mon = eM - 1;
+        end_t.tm_mday = eD;
+        end_t.tm_isdst = -1;
         
-        for(int i=0; i<v_count; i++) {
-            Event* ev = &v_events[i];
-            int col = -1;
-            
-            if(is_person_view) {
-                if(ev->lastModifiedBy < num_cols) col = ev->lastModifiedBy;
+        time_t curr_time = mktime(&base_t);
+        time_t end_time = mktime(&end_t);
+        
+        // Failsafe to generate at least one page if ends before start
+        if (end_time < curr_time) end_time = curr_time;
+        
+        while (curr_time <= end_time) {
+            int page_obj = pdf_obj_cnt++;
+            int stream_obj = pdf_obj_cnt++;
+            page_list[page_cnt++] = page_obj;
+
+            pdf_objects[page_obj] = ftell(f);
+            fprintf(f, "%d 0 obj\n<< /Type /Page /Parent %d 0 R /MediaBox [0 0 %.2f %.2f] /Contents %d 0 R /Resources << /Font << /F1 %d 0 R /F2 %d 0 R >> >> >>\nendobj\n", 
+                page_obj, pages_obj, pt_w, pt_h, stream_obj, font1_obj, font2_obj);
+
+            char planner_title[128];
+            if (is_person_view) {
+                sprintf(planner_title, "Schedule - %s %d, %d", months[base_t.tm_mon+1], base_t.tm_mday, base_t.tm_year+1900);
             } else {
+                if (num_cols == 1) sprintf(planner_title, "%s %d, %d", months[base_t.tm_mon+1], base_t.tm_mday, base_t.tm_year+1900);
+                else sprintf(planner_title, "Week of %s %d, %d", short_months[base_t.tm_mon+1], base_t.tm_mday, base_t.tm_year+1900);
+            }
+            pdf_center_text(&s, planner_title, m_x_grid, pt_h - m_y - 20, gw, 20, 1);
+
+            for(int c=0; c<num_cols; c++) {
+                char chd[64];
+                if(is_person_view) {
+                    if (c < people_count && strlen(people[c]) > 0) {
+                        sprintf(chd, "%s", people[c]);
+                    } else {
+                        sprintf(chd, "Person %d", c + 1);
+                    }
+                } else {
+                    struct tm t = base_t;
+                    t.tm_mday += c;
+                    mktime(&t);
+                    sprintf(chd, "%s %d", short_months[t.tm_mon + 1], t.tm_mday);
+                }
+                pdf_center_text(&s, chd, m_x_grid + c*cw, pt_h - m_top + 10, cw, 12, 1);
+                
+                // Draw column lines
+                s_app(&s, "0.5 0.5 0.5 RG 1 w %.2f %.2f m %.2f %.2f l S\n", m_x_grid + c*cw, m_y, m_x_grid + c*cw, m_y + gh);
+            }
+            s_app(&s, "0.5 0.5 0.5 RG 1 w %.2f %.2f m %.2f %.2f l S\n", m_x_grid + gw, m_y, m_x_grid + gw, m_y + gh); // Last Line
+
+            // Hourly lines (0 - 24)
+            for(int h=0; h<=24; h++) {
+                float hy = m_y + gh - (h / 24.0f) * gh;
+                s_app(&s, "0.8 0.8 0.8 RG 1 w %.2f %.2f m %.2f %.2f l S\n", m_x_grid, hy, m_x_grid + gw, hy);
+                if(h < 24 && h % 2 == 0) { // Labels every 2 hours
+                    char hl[16]; format_time(h*60, hl);
+                    s_app(&s, "BT /F1 8 Tf 0.5 0.5 0.5 rg %.2f %.2f Td (%s) Tj ET\n", m_x_grid - 39, hy - 3, hl);
+                }
+            }
+            
+            for(int i=0; i<v_count; i++) {
+                Event* ev = &v_events[i];
+                int col = -1;
+                
                 struct tm te;
                 memset(&te, 0, sizeof(te));
                 te.tm_year = ev->year - 1900; 
                 te.tm_mon = ev->month - 1; 
                 te.tm_mday = ev->day;
                 te.tm_isdst = -1;
-                
-                time_t t1 = mktime(&base_t);
                 time_t t2 = mktime(&te);
-                int diff = difftime(t2, t1) / 86400;
-                if(diff >= 0 && diff < num_cols) col = diff;
-            }
-            
-            if(col >= 0) {
-                float ev_y_start = m_y + gh - (ev->startMin / 1440.0f) * gh;
-                float ev_h = (ev->duration / 1440.0f) * gh;
-                if (ev_h < 12) ev_h = 12; // Minimum height to display text
-                float ev_y = ev_y_start - ev_h;
                 
-                pdf_color(&s, 0, ev->color);
-                pdf_rounded_rect(&s, m_x_grid + col*cw + 2, ev_y, cw - 4, ev_h, 3);
+                if(is_person_view) {
+                    int diff = difftime(t2, curr_time) / 86400;
+                    if(diff == 0) {
+                        if(ev->lastModifiedBy < num_cols) col = ev->lastModifiedBy;
+                    }
+                } else {
+                    int diff = difftime(t2, curr_time) / 86400;
+                    if(diff >= 0 && diff < num_cols) col = diff;
+                }
                 
-                pdf_text_color(&s, ev->color);
-                char tt[32]; strncpy(tt, ev->title, 20); tt[20]=0;
-                s_app(&s, "BT /F2 8 Tf %.2f %.2f Td (%s) Tj ET\n", m_x_grid + col*cw + 4, ev_y_start - 10, tt);
+                if(col >= 0) {
+                    float ev_y_start = m_y + gh - (ev->startMin / 1440.0f) * gh;
+                    float ev_h = (ev->duration / 1440.0f) * gh;
+                    if (ev_h < 12) ev_h = 12; // Minimum height to display text
+                    float ev_y = ev_y_start - ev_h;
+                    
+                    pdf_color(&s, 0, ev->color);
+                    pdf_rounded_rect(&s, m_x_grid + col*cw + 2, ev_y, cw - 4, ev_h, 3);
+                    
+                    pdf_text_color(&s, ev->color);
+                    char tt[128]; 
+                    // Expanded string truncation threshold to 127
+                    strncpy(tt, ev->title, 127); tt[127]=0;
+                    s_app(&s, "BT /F2 8 Tf %.2f %.2f Td (%s) Tj ET\n", m_x_grid + col*cw + 4, ev_y_start - 10, tt);
+                }
             }
-        }
 
-        pdf_objects[stream_obj] = ftell(f);
-        fprintf(f, "%d 0 obj\n<< /Length %d >>\nstream\n%s\nendstream\nendobj\n", stream_obj, s.len, s.data);
+            // Flush the current page to stream
+            pdf_objects[stream_obj] = ftell(f);
+            fprintf(f, "%d 0 obj\n<< /Length %d >>\nstream\n%s\nendstream\nendobj\n", stream_obj, s.len, s.data);
+            s.len = 0; // IMPORTANT: Clear stream for the next page
+            
+            // Advance timeline for dynamic multi-page rendering
+            if (mode == 0 || mode == 3 || mode == 4) base_t.tm_mday += 1;
+            else if (mode == 1) base_t.tm_mday += 4;
+            else if (mode == 2) base_t.tm_mday += 7;
+            
+            curr_time = mktime(&base_t); // Will automatically normalize day overflows
+        }
     }
 
     // Write Pages Dictionary Object
@@ -629,6 +661,7 @@ void CreatePDFAction(HWND hwnd) {
     
     if (GetSaveFileNameA(&ofn)) {
         int first_day = SendMessageA(hCboFirstDay, CB_GETCURSEL, 0, 0);
+        int sel_node = SendMessageA(hCboNode, CB_GETCURSEL, 0, 0) - 1; // -1 for Show All
         
         char margH_str[16], margV_str[16];
         GetWindowTextA(hTxtMargH, margH_str, 16);
@@ -639,7 +672,7 @@ void CreatePDFAction(HWND hwnd) {
         SYSTEMTIME stEnd;
         SendMessage(hDateEnd, DTM_GETSYSTEMTIME, 0, (LPARAM)&stEnd);
 
-        generate_pdf(out_path, mode, first_day, margH_pct, margV_pct,
+        generate_pdf(out_path, mode, first_day, sel_node, margH_pct, margV_pct,
             stStart.wYear, stStart.wMonth, stStart.wDay, 
             stEnd.wYear, stEnd.wMonth, stEnd.wDay);
         
@@ -690,8 +723,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             hTxtMargV = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "4", WS_VISIBLE | WS_CHILD | ES_AUTOHSCROLL, 345, 120, 30, 22, hwnd, NULL, NULL, NULL);
             CreateWindowA("STATIC", "V", WS_VISIBLE | WS_CHILD, 380, 120, 15, 20, hwnd, NULL, NULL, NULL);
 
-            hBtnCreate = CreateWindowA("BUTTON", "Create PDF", WS_VISIBLE | WS_CHILD, 120, 160, 100, 30, hwnd, (HMENU)3, NULL, NULL);
-            hBtnExit = CreateWindowA("BUTTON", "Exit", WS_VISIBLE | WS_CHILD, 240, 160, 100, 30, hwnd, (HMENU)4, NULL, NULL);
+            CreateWindowA("STATIC", "Node Filter:", WS_VISIBLE | WS_CHILD, 10, 155, 80, 20, hwnd, NULL, NULL, NULL);
+            hCboNode = CreateWindowA("COMBOBOX", "", CBS_DROPDOWNLIST | WS_VISIBLE | WS_CHILD, 90, 155, 150, 200, hwnd, NULL, NULL, NULL);
+            SendMessageA(hCboNode, CB_ADDSTRING, 0, (LPARAM)"Show All");
+            for(int i = 0; i < 32; i++) {
+                char nodeStr[32];
+                sprintf(nodeStr, "Node %d", i);
+                SendMessageA(hCboNode, CB_ADDSTRING, 0, (LPARAM)nodeStr);
+            }
+            SendMessageA(hCboNode, CB_SETCURSEL, 0, 0);
+
+            hBtnCreate = CreateWindowA("BUTTON", "Create PDF", WS_VISIBLE | WS_CHILD, 120, 195, 100, 30, hwnd, (HMENU)3, NULL, NULL);
+            hBtnExit = CreateWindowA("BUTTON", "Exit", WS_VISIBLE | WS_CHILD, 240, 195, 100, 30, hwnd, (HMENU)4, NULL, NULL);
             break;
         }
         case WM_COMMAND: {
@@ -765,6 +808,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         const char* out_pdf = "calendar.pdf";
         int mode = 5; 
         int first_day = 0;
+        int filter_node = -1;
         float margH_pct = 4.0f, margV_pct = 4.0f;
         int sY=2026, sM=1, sD=1, eY=2026, eM=1, eD=31;
         
@@ -773,6 +817,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         for (int i = 3; i < __argc; i++) {
             if (strncmp(__argv[i], "-mode=", 6) == 0) {
                 mode = atoi(__argv[i] + 6);
+            } else if (strncmp(__argv[i], "-node=", 6) == 0) {
+                filter_node = atoi(__argv[i] + 6);
             } else if (strncmp(__argv[i], "-start=", 7) == 0) {
                 sscanf(__argv[i] + 7, "%4d%2d%2d", &sY, &sM, &sD);
             } else if (strncmp(__argv[i], "-end=", 5) == 0) {
@@ -781,7 +827,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         }
         
         if (parse_csv(in_csv)) {
-            generate_pdf(out_pdf, mode, first_day, margH_pct, margV_pct, sY, sM, sD, eY, eM, eD);
+            generate_pdf(out_pdf, mode, first_day, filter_node, margH_pct, margV_pct, sY, sM, sD, eY, eM, eD);
         }
         return 0;
     }
@@ -794,9 +840,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     RegisterClassA(&wc);
 
+    // Adjusted window height to comfortably fit the new Node Filter Dropdown
     hMain = CreateWindowExA(0, wc.lpszClassName, "CSV to Calendar PDF", 
         WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX, 
-        CW_USEDEFAULT, CW_USEDEFAULT, 420, 250, NULL, NULL, hInstance, NULL);
+        CW_USEDEFAULT, CW_USEDEFAULT, 420, 290, NULL, NULL, hInstance, NULL);
 
     ShowWindow(hMain, nCmdShow);
     UpdateWindow(hMain);
